@@ -1,0 +1,203 @@
+1	Create an S3 Bucket which would be made public for sometime later on.
+2	In the CORS Configuration of the S3 bucket put the below policy and save.
+		<?xml version="1.0" encoding="UTF-8"?>														
+		<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01">
+		   <CORSRule>														
+		      <AllowedOrigin>*</AllowedOrigin>														
+		      <AllowedMethod>GET</AllowedMethod>														
+		      <AllowedMethod>PUT</AllowedMethod>														
+		      <AllowedMethod>POST</AllowedMethod>														
+		      <AllowedMethod>DELETE</AllowedMethod>														
+		      <AllowedHeader>*</AllowedHeader>														
+		   </CORSRule>														
+		</CORSConfiguration>														
+3	Create Your Facebook App and Get the App ID															
+		Goto	developers.facebook.com													
+		Create New App														
+		Name the App something appropriate														
+		In the left navigation pane copy the AppID
+		In the App Domains enter the domain name you own and that would be configured onto a Load balancer in front on an EC2 Instance, that we would configure later.
+		Save Changes														
+4	Create an IAM Role to Assign Users Logged in through Facebook.	
+		Goto IAM	
+		Create a Policy		As below and make sure to change the YOUR_BUCKET_NAME.
+		
+		{														
+		   "Version": "2012-10-17",														
+		   "Statement": [														
+		      {														
+		         "Action": [														
+		            "s3:PutObject",														
+		            "s3:PutObjectAcl"														
+		         ],														
+		         "Resource": [														
+		            "arn:aws:s3:::YOUR_BUCKET_NAME/facebook-${graph.facebook.com:id}/*"														
+		         ],														
+		         "Effect": "Allow"														
+		      },														
+		      {														
+		         "Action": [														
+		            "s3:ListBucket"														
+		         ],														
+		         "Resource": [														
+		            "arn:aws:s3:::YOUR_BUCKET_NAME"														
+		         ],														
+		         "Effect": "Allow",														
+		         "Condition": {														
+		            "StringEquals": {														
+		               "s3:prefix": "facebook-${graph.facebook.com:id}"														
+		            }														
+		         }														
+		      }														
+		   ]														
+		}
+		
+5	Create an IAM Role															
+		Select type of trusted entity														
+		Web identity		-		Cognito or any OpenID provider												
+		Identity Provider	-		Facebook												
+		Application ID		-		Paste the App ID copied earlier												
+		Next:Permissions	-		Select the policy created above												
+	Name the role something - 		facebook-app-webid-role
+	Copy the ARN of the Role on a text editor for later use.							
+6	Create a index.html File Containing the Code below - make sure to change the YOUR _APP_ID, YOUR_ROLE_ARN, YOUR_BUCKET_NAME, REGION.
+
+		<!DOCTYPE html>														
+		<html>
+		<head>														
+		    <title>AWS SDK for JavaScript - Sample Application</title>														
+		    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1.12.min.js"></script>														
+		</head>														
+		<body>														
+		    <input type="file" id="file-chooser" />														
+		    <button id="upload-button" style="display:none">Upload to S3</button>														
+		    <div id="results"></div>														
+		    <div id="fb-root"></div>														
+		    <script type="text/javascript">														
+		        var appId = 'YOUR_APP_ID';														
+		        var roleArn = 'YOUR_ROLE_ARN';														
+		        var bucketName = 'YOUR_BUCKET_NAME';														
+		        AWS.config.region = 'YOUR_BUCKET_REGION';														
+		        var fbUserId;														
+		        var bucket = new AWS.S3({														
+		            params: {														
+		                Bucket: bucketName														
+		            }														
+		        });														
+		        var fileChooser = document.getElementById('file-chooser');														
+		        var button = document.getElementById('upload-button');														
+		        var results = document.getElementById('results');														
+		        button.addEventListener('click', function () {														
+		            var file = fileChooser.files[0];														
+		            if (file) {														
+		                results.innerHTML = '';														
+		                //Object key will be facebook-USERID#/FILE_NAME														
+		                var objKey = 'facebook-' + fbUserId + '/' + file.name;														
+		                var params = {														
+		                    Key: objKey,														
+		                    ContentType: file.type,														
+		                    Body: file,														
+		                    ACL: 'public-read'														
+		                };														
+		                bucket.putObject(params, function (err, data) {														
+		                    if (err) {														
+		                        results.innerHTML = 'ERROR: ' + err;														
+		                    } else {														
+		                        listObjs();														
+		                    }														
+		                });														
+		            } else {														
+		                results.innerHTML = 'Nothing to upload.';														
+		            }														
+		        }, false);														
+		        function listObjs() {														
+		            var prefix = 'facebook-' + fbUserId;														
+		            bucket.listObjects({														
+		                Prefix: prefix														
+		            }, function (err, data) {														
+		                if (err) {														
+		                    results.innerHTML = 'ERROR: ' + err;														
+		                } else {														
+		                    var objKeys = "";														
+		                    data.Contents.forEach(function (obj) {														
+		                        objKeys += obj.Key + "<br>";														
+		                    });														
+		                    results.innerHTML = objKeys;														
+		                }														
+		            });														
+		        }														
+		        /*!														
+		         * Login to your application using Facebook.														
+		         * Uses the Facebook SDK for JavaScript available here:														
+		         * https://developers.facebook.com/docs/javascript/gettingstarted/														
+		         */														
+		        window.fbAsyncInit = function () {														
+		            FB.init({														
+		                appId: appId														
+		            });														
+		            FB.login(function (response) {														
+		                bucket.config.credentials = new AWS.WebIdentityCredentials({														
+		                    ProviderId: 'graph.facebook.com',														
+		                    RoleArn: roleArn,														
+		                    WebIdentityToken: response.authResponse.accessToken														
+		                });														
+		                fbUserId = response.authResponse.userID;														
+		                button.style.display = 'block';														
+		            });														
+		        };														
+		         // Load the Facebook SDK asynchronously														
+		        (function (d, s, id) {														
+		            var js, fjs = d.getElementsByTagName(s)[0];														
+		            if (d.getElementById(id)) {														
+		                return;														
+		            }														
+		            js = d.createElement(s);														
+		            js.id = id;														
+		            js.src = "//connect.facebook.net/en_US/all.js";														
+		            fjs.parentNode.insertBefore(js, fjs);														
+		        }(document, 'script', 'facebook-jssdk'));														
+		    </script>														
+		</body>														
+		</html>														
+		
+		
+7. Before continuing the next step make sure to create a ACM certificate with the domain name you provided in the Facebook App.
+												
+8	Create an Amazon Linux EC2 Instance in the Private Subnet of a VPC you would have created and configure Apache WebServer on it, below is the user data (for configuring apache web server) to be passed to the EC2 instance.
+
+		#!bin/bash
+		yum install httpd -y
+		service httpd start
+		chkconfig httpd on
+	
+		Make sure to assign SSH,HTTP & HTTPS protocols in the Security Group.			
+		
+9	Use FileZilla (or scp) to copy index.html you create above to /var/www/html directory on the EC2 instance.
+
+10	Create a ALB in the Public Subnet of a VPC.
+		Listeners	HTTP											
+					HTTPS											
+					
+11	Configure Security Settings													
+		Certificate Type -	Choose a certificate from ACM(recommended)										
+		Certificate Name -	Choose the correct Certificate Name.
+		Stick to the default Security Policy
+		
+12	For the Security Group Choose the security group you assigned to the EC2 Instance previously with HTTP & HTTPS protocols.
+
+13	Create a Target Group															
+		Stick to defaults
+		
+14	Register the EC2 Instance with the target group.
+
+15	Create the Load Balancer. Note: It can take some time to register the EC2 instance in a Healthy State.
+
+16	In Route 53 make sure you have created a Hosted Zone with the domain name you own and then, Create a ALIAS Record.
+		The Elb should automatically be shown under the alias.
+		Update the Name Servers with the Domain registrar if required.
+		
+17	Check the application via domain name										
+		There can be Popup Blocker make sure to allow PopUps.
+		Sign Up via Facebook UserName and Password
+		
+18	Try Uploading a File from the Laptop to S3 - If gives Access Denied error, make the bucket public for few moments and try again							
